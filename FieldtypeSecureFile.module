@@ -1,0 +1,308 @@
+<?php
+require_once(__DIR__ . '/PagefilesSecure.php');
+require_once(__DIR__ . '/PagefileSecure.php');
+
+/**
+ * FieldtypeSecureFile
+ * ProcessWire FieldType storing files in a customized location, outside the web root.
+ *
+ * @author Stefan Wanzenried <stefan.wanzenried@gmail.com>
+ * @license http://www.gnu.org/licenses/gpl-2.0.txt GNU General Public License, version 2
+ * @version 1.0.3
+ */
+class FieldtypeSecureFile extends FieldtypeFile
+{
+
+    /**
+     * @var array
+     */
+    protected static $allowedInputFields = array('InputfieldFile');
+
+
+    public function __construct()
+    {
+        parent::__construct();
+        $this->defaultInputfieldClass = 'InputfieldFile';
+    }
+
+
+    /**
+     * @return array
+     */
+    public static function getModuleInfo()
+    {
+        return array(
+            'title' => __('Secure File', __FILE__),
+            'version' => 101,
+            'summary' => __('Store a file in a customized location, e.g. outside of the web root', __FILE__),
+            'author' => 'Luc Vandamme (based on the work of Stefan Wanzenried)',
+        );
+    }
+
+
+    public function init()
+    {
+        $this->addHook('PagefilesManager::securePath', $this, 'hookGetSecurePath');
+        $this->addHookAfter('Pages::deleted', $this, 'deleteSecureFiles'); // this removes both !
+        $this->addHookBefore('Pagefiles::delete', $this, 'deleteFiles');        
+        // TO DO
+        //$this->addHookAfter('InputfieldFile::fileAdded', $this, 'fileReplaced'); // Triggers everytime a file is added !!! NOT GOOD
+        // a custom hook is needed to trigger only when a file is replaced
+    }
+
+
+    /**
+     * Return the secure path of a page based on the path settings in a Secure File field.
+     *
+     * @param HookEvent $event
+     * @return string
+     * @throws WireException
+     */
+    public function hookGetSecurePath(HookEvent $event)
+    {
+        /** @var PagefilesManager $manager */
+        /** @var Field $field */
+        $manager = $event->object;
+        $field = $event->arguments(0);
+        $storageLocation = $field->get('storageLocation');
+        // Check if storage location is an absolute path or a relative path from the ProcessWire root
+        if (strpos($storageLocation, '.') === 0) {
+            $storageLocation = realpath($this->config->paths('root') . $storageLocation) . DIRECTORY_SEPARATOR;
+        } else {
+            $storageLocation = realpath($storageLocation) . DIRECTORY_SEPARATOR;
+        }
+        if ($storageLocation === false) {
+            throw new WireException("Secure File: Could not resolve the storage location");
+        }
+        if (!is_dir($storageLocation) || !is_writable($storageLocation)) {
+            // We fail because the user did not manually create the folder where the files are stored.
+            // Since we create folders recursively below, be sure that the location is correct.
+            throw new WireException("Secure File: Path '{$storageLocation}' does not exist or is not writeable");
+        }
+        $pathPage = $manager->path();
+        $pathFiles = $this->wire('config')->paths->files;
+        $path = $storageLocation . substr($pathPage, strlen($pathFiles));
+        //$this->message("The path in the hook is: " . $path);
+        if (!is_dir($path)) {
+            wireMkdir($path, true);
+        }
+        $event->return = $path;
+    }
+    
+
+    /**
+     * Delete the secure file when the Pagefile is removed.
+     *
+     * @param HookEvent $event
+     */
+    /*public function fileReplaced(HookEvent $event)
+    {
+        wire('log')->save('secure-file-log', "fileReplaced called"); // Debugging line
+        // Your code to handle the file replacement
+        $pagefiles = $event->object;
+        $page = $pagefiles->page;
+        $field = $pagefiles->field;
+        // Log page and field information
+        wire('log')->save('secure-file-log', "Page ID (fileReplaced): " . $page->id); // Debugging line
+        wire('log')->save('secure-file-log', "Field name (fileReplaced): " . $field->name); // Debugging line
+        // Ensure this is a SecureFile field
+        if (!$field->type instanceof FieldtypeSecureFile) {
+            //wire('log')->save('secure-file-log', "Field is not an instance of FieldtypeSecureFile"); // Debugging line
+            return;
+        }
+        // to do
+    }*/
+
+    /**
+     * Delete the secure file when the Pagefile is deleted.
+     *
+     * @param HookEvent $event
+     */
+    public function deleteFiles(HookEvent $event) {
+                
+        $pagefiles = $event->object;
+        $page = $pagefiles->page;
+        $field = $pagefiles->field;
+
+        // Log page and field information
+        //wire('log')->save('secure-file-log', "Page ID: " . $page->id); // Debugging line
+        //wire('log')->save('secure-file-log', "Field name: " . $field->name); // Debugging line
+
+        // Ensure this is a SecureFile field
+        if (!$field->type instanceof FieldtypeSecureFile) {
+            //wire('log')->save('secure-file-log', "Field is not an instance of FieldtypeSecureFile"); // Debugging line
+            return;
+        }
+
+
+        // Get the storage location
+        $storageLocation = $field->get('storageLocation');
+        // Check if storage location is an absolute path or a relative path from the ProcessWire root
+        if (strpos($storageLocation, '.') === 0) {
+            $storageLocation = realpath($this->config->paths('root') . $storageLocation) . DIRECTORY_SEPARATOR;
+        } else {
+            $storageLocation = realpath($storageLocation) . DIRECTORY_SEPARATOR;
+        }
+        if ($storageLocation === false) {
+            throw new WireException("Secure File: Could not resolve the storage location");
+        }
+
+        $path = $storageLocation . $page->id.'/';
+
+        // Iterate over each file in the Pagefiles object
+        foreach ($pagefiles as $file) {
+            // Construct the full path to the file
+            $filePath = $path . $file->name;
+            if (file_exists($filePath)) {
+                if (!unlink($filePath)) {
+                    wire('log')->save('secure-file-log', "Failed to remove file (deleteFiles): " . $filePath); // Debugging line
+                } else {
+                    wire('log')->save('secure-file-log', "File successfully removed (deleteFiles): " . $filePath); // Debugging line
+                }
+            } else {
+                wire('log')->save('secure-file-log', "File does not exist (deleteFiles): " . $filePath); // Debugging line
+            }
+        }
+    }
+
+
+    /**
+     * Delete the secure files and the directory of a page when the page is deleted.
+     *
+     * @param HookEvent $event
+     */
+    public function deleteSecureFiles(HookEvent $event) {
+        //wire('log')->save('secure-file-log', "deleteSecureFiles called"); // Debugging line
+        $page = $event->arguments(0);
+        foreach ($page->fields as $field) {
+            // Ensure this is a SecureFile field
+            if (!$field->type instanceof FieldtypeSecureFile) continue;
+            // Remove the empty directory that has the name of the page ID
+            $storageLocation = $field->get('storageLocation');
+            // Check if storage location is an absolute path or a relative path from the ProcessWire root
+            if (strpos($storageLocation, '.') === 0) {
+                $storageLocation = realpath($this->config->paths('root') . $storageLocation) . DIRECTORY_SEPARATOR;
+            } else {
+                $storageLocation = realpath($storageLocation) . DIRECTORY_SEPARATOR;
+            }
+            if ($storageLocation === false) {
+                throw new WireException("Secure File: Could not resolve the storage location");
+            }
+            $path = $storageLocation . $page->id;
+            // Ensure the directory is empty before attempting to remove it
+            if (is_dir($path)) {
+                $dir = opendir($path);
+                if ($dir) {
+                    while (($file = readdir($dir)) !== false) {
+                        if ($file != '.' && $file != '..') {
+                            wire('log')->save('secure-file-log', "Removing file (deleteSecureFiles): " . $path . '/' . $file); // Debugging line
+                            if (!unlink($path . '/' . $file)) {
+                                wire('log')->save('secure-file-log', "Failed to remove file (deleteSecureFiles): " . $path . '/' . $file); // Debugging line
+                            }
+                        }
+                    }
+                    closedir($dir);
+                }
+                // Log the contents of the directory before attempting to remove it
+                $contents = scandir($path);
+                // Attempt to remove the directory
+                if (count($contents) == 2) { // 2 because '.' and '..' are always present
+                    if (rmdir($path)) {
+                        wire('log')->save('secure-file-log', "Directory successfully removed (deleteSecureFiles): " . $path); // Debugging line
+                    } else {
+                        wire('log')->save('secure-file-log', "Failed to remove directory: " . $path); // Debugging line
+                        throw new Exception("Could not remove directory: $path");
+                    }
+                } else {
+                    wire('log')->save('secure-file-log', "Directory not empty or does not exist: " . $path); // Debugging line
+                    throw new Exception("Directory is not empty or does not exist: $path");
+                }
+            } else {
+                wire('log')->save('secure-file-log', "Directory does not exist: " . $path); // Debugging line
+            }
+        }
+    }
+
+    /**
+     * @param Page $page
+     * @param Field $field
+     * @param int|object|string|WireArray $value
+     * @return array|int|mixed|object|string|WireArray
+     */
+    public function sanitizeValue(Page $page, Field $field, $value)
+    {
+        if ($value instanceof PagefilesSecure) return $value;
+        return parent::sanitizeValue($page, $field, $value);
+    }
+
+
+    /**
+     * @param Page $page
+     * @param Field $field
+     * @return PagefilesSecure
+     */
+    public function getBlankValue(Page $page, Field $field)
+    {
+        $pagefiles = new PagefilesSecure($page);
+        $pagefiles->setField($field);
+        $pagefiles->setTrackChanges(true);
+        return $pagefiles;
+    }
+
+
+    /**
+     * Returns a blank Pagefile instance, which may be another type of Pagefile (i.e. a Pageimage)
+     *
+     * This method ensures that the correct type of items are populated by wakeupValue()
+     *
+     * @param Pagefiles $pagefiles
+     * @param string $filename
+     * @return PagefileSecure
+     */
+    protected function getBlankPagefile(Pagefiles $pagefiles, $filename)
+    {
+        return new PagefileSecure($pagefiles, $filename);
+    }
+    
+
+    /**
+     * @param Field $field
+     * @return InputfieldWrapper
+     */
+    public function ___getConfigInputfields(Field $field)
+    {
+        $inputfields = parent::___getConfigInputfields($field);
+
+        $fStorage = $this->modules->get('InputfieldText');
+        $fStorage->attr('name', 'storageLocation');
+        $fStorage->attr('value', $field->get('storageLocation'));
+        $fStorage->label = $this->_('Storage Location');
+        $fStorage->description = $this->_('Enter a path outside the web root where the files are stored. (example: /home/username/securefiles/ )');
+        $fStorage->notes = $this->_('You need to create the directory manually and make sure that the user running the web server has write permission.');
+        $fStorage->required = 1;
+        $inputfields->prepend($fStorage);
+
+        return $inputfields;
+    }
+
+    
+    /**
+	 * Field advanced config
+	 *
+	 */
+	public function ___getConfigAdvancedInputfields(Field $field)
+	{
+		$inputfields = parent::___getConfigAdvancedInputfields($field);
+		// Only allow InputfieldFile as Inputfield
+		$fInputfield = $inputfields->get('inputfieldClass');
+		$options = $fInputfield->getOptions();
+		foreach ($options as $option => $title) {
+			if (!in_array($option, static::$allowedInputFields)) {
+				$fInputfield->removeOption($option);
+			}
+		}
+		$fInputfield->notes = $this->_('Currently, InputfieldFile is the only supported Inputfield for secure files');
+		return $inputfields;
+	}
+
+}
